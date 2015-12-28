@@ -1,0 +1,24 @@
+
+export LD_LIBRARY_PATH=~/cuda/lib64:$LD_LIBRARY_PATH
+#export LD_LIBRARY_PATH=~/DeepNetStuff/libs/lib:$LD_LIBRARY_PATH
+export CPATH=~/cuda/include:$CPATH
+export LIBRARY_PATH=~/cuda/lib64:$LD_LIBRARY_PATH
+#export LIBRARY_PATH=~/DeepNetStuff/libs/lib:$LIBRARY_PATH
+#Caffe Requirements
+export LD_LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs2/usr/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/lib/intel64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/lib/intel64:$LD_LIBRARY_PATH
+export CPATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/include:$CPATH
+export CPATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs2/usr/include:$CPATH
+export CPATH=~/DeepNetStuf/caffenew/include:$CPATH
+export PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/bin:$PATH
+export PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/bin:$PATH
+export PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs2/usr/bin:$PATH
+export LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs2/usr/lib:$LIBRARY_PATH
+export LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/lib:$LIBRARY_PATH
+export LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/lib/intel64:$LIBRARY_PATH
+export LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/lib:$LIBRARY_PATH
+export LIBRARY_PATH=/scratch/HPS/pool0/dmetha/caffe-deps/libs/mkl/lib/intel64:$LIBRARY_PATH
+
