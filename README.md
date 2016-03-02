@@ -10,7 +10,7 @@ https://github.com/mehtadushy/DeepNetStuff/blob/master/caffe/src/caffe/layers/l1
 #### Usage
 Exactly like L2 Loss Layer
 
-### SSIM Loss Layer (Structural Similarity)
+### Structural Similarity (SSIM) Loss Layer (Perception based loss)
 https://github.com/mehtadushy/DeepNetStuff/blob/master/caffe/include/caffe/layers/ssim_loss_layer.hpp
 
 https://github.com/mehtadushy/DeepNetStuff/blob/master/caffe/src/caffe/layers/ssim_loss_layer.cpp
