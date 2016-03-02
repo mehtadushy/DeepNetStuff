@@ -1,4 +1,5 @@
-###Bits and Bobs From Deepnet Experimentation
+###Bits and Bobs From Deepnet Implementations. 
+Mostly SIGGRAPH stuff. Thesis stuff to come later.
 
 ## New Layers With CPU and GPU Implementations
 ### L1 Loss Layer
