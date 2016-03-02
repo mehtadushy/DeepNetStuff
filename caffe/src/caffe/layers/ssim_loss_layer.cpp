@@ -13,31 +13,38 @@ using std::max;
 template <typename Dtype>
 void SSIMLossLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) {
-  //TODO: Using Pooling Parameters for now. Implement SSIMParameters 
-  // at a later stage and stop using pooling parameters
-  PoolingParameter pool_param = this->layer_param_.pooling_param();
-  CHECK(pool_param.has_kernel_size()) 
-      << "Patch Size and Gauss SIGMA derive from kernel_size. kernel_w and kernel_h are not used.";
-  CHECK(pool_param.has_stride())
-      << "Stride in both dimensions is the same, and derives from stride. stride_w and stride_h are not used.";
-  kernel_h_ = kernel_w_ = pool_param.kernel_size();
+  SSIMLossParameter ssim_param = this->layer_param_.ssim_loss_param();
+  CHECK(ssim_param.has_kernel_size()) 
+      << "Patch Size and Gauss SIGMA derive from kernel_size.";
+  CHECK(ssim_param.has_stride())
+      << "Stride in both dimensions is the same, and derives from stride.";
+  CHECK(ssim_param.has_c1())
+      << "Constant C1.";
+  CHECK(ssim_param.has_c2())
+      << "Constant C2.";
+  c1_ = ssim_param.c1();
+  c2_ = ssim_param.c2();
+  CHECK_GT(c1_, 0) << "Abs(c1) cannot be zero.";
+  CHECK_GT(c2_, 0) << "Abs(c2) cannot be zero.";
+  kernel_h_ = kernel_w_ = ssim_param.kernel_size();
   CHECK_GT(kernel_h_, 0) << "Filter dimensions cannot be zero.";
-  CHECK_GT(kernel_w_, 0) << "Filter dimensions cannot be zero.";
-  stride_h_ = stride_w_ = pool_param.stride();
+  stride_h_ = stride_w_ = ssim_param.stride();
   CHECK_GT(stride_h_, 0) << "Stride cannot be zero.";
-  //CHECK_GT(kernel_w_, 0) << "Filter dimensions cannot be zero.";
+
   gauss_kernel_.Reshape(1,1,kernel_h_,kernel_w_);
   double* gaussian = gauss_kernel_.mutable_cpu_data();
-  Dtype sigma = (kernel_w_+kernel_h_)/Dtype(12);
+  double sigma = (kernel_w_+kernel_h_)/Dtype(12);
+  double gauss_sum = 0;
+
   for (int h = 0; h < kernel_h_; ++h) {
       for (int w = 0; w < kernel_w_; ++w) {
 	  gaussian[h * kernel_w_ + w] = 
 		  exp(-(pow((h - kernel_h_/2.0),2) + pow((w - kernel_w_/2.0),2)) / (2.0* sigma * sigma))
 		      / (2 * 3.14159 * sigma * sigma);
+	   gauss_sum += gaussian[h* kernel_w_ + w];
       }
   }
-  c1_ = 0.00001;
-  c2_ = 0.00001;
+  caffe_scal(gauss_kernel_.count(), 1.0/gauss_sum, gaussian);
 }
 
 template <typename Dtype>
@@ -137,12 +144,14 @@ void SSIMLossLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
   const Dtype C2 = c2_;
   caffe_add(count, sx2_.cpu_data(), sy2_.cpu_data(), tempContainer2.mutable_cpu_data()); 
   caffe_add_scalar(count, C2, tempContainer2.mutable_cpu_data());
-  caffe_cpu_axpby(count, Dtype(2), sxy_.cpu_data(), Dtype(0), tempContainer1.mutable_cpu_data());
+  caffe_cpu_scale(count, Dtype(2), sxy_.cpu_data(), tempContainer1.mutable_cpu_data());
+//  caffe_cpu_axpby(count, Dtype(2), sxy_.cpu_data(), Dtype(0), tempContainer1.mutable_cpu_data());
   caffe_add_scalar(count, C2, tempContainer1.mutable_cpu_data());
   caffe_div(count, tempContainer1.cpu_data(), tempContainer2.cpu_data(), cs_.mutable_cpu_data());
   
-  Dtype ssim = caffe_cpu_dot(count, lp_.cpu_data(),cs_.cpu_data()) / bottom[0]->num();
-  Dtype loss = Dtype(1)-ssim;
+  Dtype ssim = caffe_cpu_dot(count, lp_.cpu_data(),cs_.cpu_data()) ;
+  //Dtype ssim = caffe_cpu_dot(count, lp_.cpu_data(),cs_.cpu_data()) / ux_.count();
+  Dtype loss = (Dtype(count)-ssim)/ bottom[0]->num();
   top[0]->mutable_cpu_data()[0] = loss;
 }
 
@@ -162,10 +171,11 @@ void SSIMLossLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
   const Dtype* sx2 = sx2_.cpu_data();
   const Dtype* sy2 = sy2_.cpu_data();
   const Dtype* sxy = sxy_.cpu_data();
-  const double* gaussian = gauss_kernel_.cpu_data();
+  const double* gaussian = gauss_kernel.cpu_data();
 
   caffe_set(bottom[0]->count(), Dtype(0), bottom_diff);
   const Dtype alpha = -top[0]->cpu_diff()[0] / bottom[0]->num();
+  //const Dtype alpha = -top[0]->cpu_diff()[0] / ux_.count();
 
   // The main loop
   for (int n = 0; n < bottom[0]->num(); ++n) {

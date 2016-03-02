@@ -95,4 +95,3 @@ class L1LossLayer : public LossLayer<Dtype> {
 }  // namespace caffe
 
 #endif  // CAFFE_L1_LOSS_LAYER_HPP_
-

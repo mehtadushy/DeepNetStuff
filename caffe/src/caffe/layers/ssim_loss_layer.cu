@@ -34,6 +34,7 @@ __global__ void CudaGaussConvolution(const int nthreads,
   }
 }
 
+
 template <typename Dtype>
 void SSIMLossLayer<Dtype>::CudaGaussConvolveHelper(const Blob<Dtype>& in,
     Blob<Dtype>& out) {	
@@ -46,10 +47,24 @@ void SSIMLossLayer<Dtype>::CudaGaussConvolveHelper(const Blob<Dtype>& in,
 	);
 }
 
+//These be scars from the debug process. They tell a tale!
+//Don't remove them.
+/*
+template <typename Dtype>
+bool isNaN(Dtype *ptr, size_t n)
+{
+    for(int k = 0; k < n; ++k)
+        if (ptr[k] != ptr[k])
+	    return true;
+    return false;
+}
+*/
+
 template <typename Dtype>
 void SSIMLossLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
     const vector<Blob<Dtype>*>& top) {	
   int count = bottom[0]->count();
+ // LOG(INFO) << "x " << isNaN(bottom[0]->cpu_data(), bottom[0]->count()) << std::endl;
   CudaGaussConvolveHelper(*bottom[0],ux_);
   CudaGaussConvolveHelper(*bottom[1],uy_);
 
@@ -76,6 +91,12 @@ void SSIMLossLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   caffe_gpu_mul(count, ux_.gpu_data(), uy_.gpu_data(), tempContainer1.mutable_gpu_data());
   caffe_gpu_sub(count, sxy_.gpu_data(), tempContainer1.gpu_data(), sxy_.mutable_gpu_data());
   
+  //More scars from the debug process. Scars maketh a battle hardened warrior.
+  //LOG(INFO) << "ux_ " << isNaN(ux_.cpu_data(), ux_.count()) << std::endl;
+  //LOG(INFO) << "uy_ " << isNaN(uy_.cpu_data(), uy_.count()) << std::endl;
+  //LOG(INFO) << "sx2_ " << isNaN(sx2_.cpu_data(), sx2_.count()) << std::endl;
+  //LOG(INFO) << "sy2_ " << isNaN(sy2_.cpu_data(), sy2_.count()) << std::endl;
+  //LOG(INFO) << "sxy_ " << isNaN(sxy_.cpu_data(), sxy_.count()) << std::endl;
   const Dtype C1 = c1_;
   caffe_gpu_scale(count, Dtype(2), tempContainer1.gpu_data(), tempContainer1.mutable_gpu_data());
   caffe_gpu_add_scalar(count, C1, tempContainer1.mutable_gpu_data());
@@ -85,15 +106,20 @@ void SSIMLossLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   const Dtype C2 = c2_;
   caffe_gpu_add(count, sx2_.gpu_data(), sy2_.gpu_data(), tempContainer2.mutable_gpu_data()); 
   caffe_gpu_add_scalar(count, C2, tempContainer2.mutable_gpu_data());
-  caffe_gpu_axpby(count, Dtype(2), sxy_.gpu_data(), Dtype(0), tempContainer1.mutable_gpu_data());
+  caffe_gpu_scale(count, Dtype(2), sxy_.gpu_data(), tempContainer1.mutable_gpu_data());
   caffe_gpu_add_scalar(count, C2, tempContainer1.mutable_gpu_data());
   caffe_gpu_div(count, tempContainer1.gpu_data(), tempContainer2.gpu_data(), cs_.mutable_gpu_data());
   
+  //LOG(INFO) << "cs_ " << isNaN(cs_.cpu_data(), cs_.count()) << std::endl;
+  //LOG(INFO) << "lp_ " << isNaN(lp_.cpu_data(), lp_.count()) << std::endl;
+
   Dtype ssim;
   caffe_gpu_dot(count, lp_.gpu_data(),cs_.gpu_data(), &ssim);
-  ssim/= bottom[0]->num();
-  Dtype loss = Dtype(1)-ssim;
-  top[0]->mutable_cpu_data()[0] = loss;
+  //ssim/= bottom[0]->num();
+  //ssim/= ux_.count();
+  Dtype loss = Dtype(count)-ssim;
+  top[0]->mutable_cpu_data()[0] = loss/bottom[0]->num();
+  //LOG(INFO) << "loss " <<isNaN(top[0]->cpu_data(),1) << std::endl; 
 }
 
 template <typename Dtype>
@@ -104,7 +130,7 @@ __global__ void SSIMBackward(const int nthreads,
     const int stride_w, const Dtype* const x,const Dtype* const y,
     const Dtype* const ux,const Dtype* const uy,
     const Dtype* const sx2, const Dtype* const sy2, const Dtype* const sxy,
-    const Dtype* const lp, const Dtype* const cs, int c1, int c2, 
+    const Dtype* const lp, const Dtype* const cs, Dtype c1, Dtype c2,  // <- These motherduckers were int for some reason! Gaaaaah!!!!
     const double* const gaussian,  Dtype* const bottom_diff) {
   CUDA_KERNEL_LOOP(index, nthreads) {
     // find out the local index
@@ -127,8 +153,8 @@ __global__ void SSIMBackward(const int nthreads,
         int wstart = pw * stride_w ;
         int hend = min(hstart + kernel_h, height );
         int wend = min(wstart + kernel_w, width);
-	Dtype deriv1 = Dtype(2) * cs[p] * (uy[p]-ux[p]*lp[p]) / (ux[p]*ux[p]+uy[p]*uy[p]+Dtype(c1));
-	Dtype deriv2 = Dtype(2) * lp[p]  / (sx2[p]+sy2[p]+Dtype(c2));
+	Dtype deriv1 = Dtype(2) * cs[p] * (uy[p]-ux[p]*lp[p]) / (ux[p]*ux[p]+uy[p]*uy[p]+c1);
+	Dtype deriv2 = Dtype(2) * lp[p]  / (sx2[p]+sy2[p]+c2);
         gradient += gaussian[(h-hstart)*kernel_w+(w-wstart)]* ( deriv1 + ( deriv2 * ((y[index] - uy[p]) - cs[p]*(x[index]-ux[p]))));
       }
     }
@@ -142,6 +168,7 @@ void SSIMLossLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     return;
   }
   const Dtype* x = bottom[0]->gpu_data();
+//  LOG(INFO) << "back x " << isNaN(bottom[0]->cpu_data(), bottom[0]->count()) << std::endl;
   const Dtype* y = bottom[1]->gpu_data();
   Dtype* bottom_diff = bottom[0]->mutable_gpu_diff();
   const Dtype* ux = ux_.gpu_data();
@@ -153,9 +180,11 @@ void SSIMLossLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
   const Dtype* sxy = sxy_.gpu_data();
   const double* gaussian = gauss_kernel_.gpu_data();
 
-  caffe_set(bottom[0]->count(), Dtype(0), bottom_diff);
-  const Dtype alpha = -top[0]->gpu_diff()[0] / bottom[0]->num();
+  caffe_gpu_set(bottom[0]->count(), Dtype(0), bottom_diff);
+  const Dtype alpha = -top[0]->cpu_diff()[0] / bottom[0]->num();
+  //const Dtype alpha = -top[0]->gpu_diff()[0] / ux_.count();
 
+  //LOG(INFO) << "alpha " << isNaN(&alpha, 1) << std::endl;
   //Parallelized on bottom, ie, q
   SSIMBackward<Dtype><<<CAFFE_GET_BLOCKS(bottom[0]->count()), CAFFE_CUDA_NUM_THREADS>>>(
         bottom[0]->count(), bottom[0]->num(), channels_,
@@ -164,11 +193,16 @@ void SSIMLossLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
 	c1_, c2_, gaussian,
 	bottom_diff 
 	);
+  //LOG(INFO) << "bottom_diff avg asum " << caffe_cpu_asum(bottom[0]->count(), bottom[0]->cpu_diff())/bottom[0]->count() << std::endl;
   caffe_gpu_scale(
           bottom[0]->count(),              // count
           alpha,                              // alpha
           bottom[0]->gpu_diff(),              // x
           bottom_diff);  // y
+  // Look up Rana Sanga. The dude had a lot of scars. Was a battle hardened ruler.
+  //LOG(INFO) << "bottom_diff " << isNaN(bottom[0]->cpu_diff(), bottom[0]->count()) << std::endl;
+  //LOG(INFO) << "bottom_diff avg asum " << caffe_cpu_asum(bottom[0]->count(), bottom[0]->cpu_diff())/bottom[0]->count() << std::endl;
+
 }
 
 INSTANTIATE_LAYER_GPU_FUNCS(SSIMLossLayer);

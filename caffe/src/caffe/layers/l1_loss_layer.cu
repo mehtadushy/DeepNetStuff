@@ -17,6 +17,7 @@ void L1LossLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   Dtype asum;
   caffe_gpu_asum(count, diff_.gpu_data(), &asum);
   Dtype loss = asum / bottom[0]->num() ;
+  //Dtype loss = asum / bottom[0]->count() ;
   top[0]->mutable_cpu_data()[0] = loss;
 }
 
@@ -27,6 +28,9 @@ void L1LossLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     if (propagate_down[i]) {
       const Dtype sign = (i == 0) ? 1 : -1;
       const Dtype alpha = sign * top[0]->cpu_diff()[0] / bottom[i]->num();
+      //Using the volume of the blob to normalize so that the loss is
+      //independent of the image size or number of channels
+      //const Dtype alpha = sign * top[0]->cpu_diff()[0] / bottom[i]->count();
       caffe_gpu_sign(bottom[i]->count(), diff_.gpu_data(),
       		     bottom[i]->mutable_gpu_diff());
       caffe_gpu_scale(
