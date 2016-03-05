@@ -60,7 +60,7 @@ void GradOrientConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& b
     CHECK_GT(kernel_shape_data[i], 0) << "Filter dimensions must be nonzero.";
   }
   //Also ensure that the kernels are square
-  CHECK_EQ(kernel_shape_data[0]_, kernel_shape_data[1])
+  CHECK_EQ(kernel_shape_data[0], kernel_shape_data[1])
         << "The Kernels should be square.";
 
   // Setup stride dimensions (stride_).
@@ -128,7 +128,6 @@ void GradOrientConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& b
       << "Number of output should be multiples of group.";
 
   //Reverse_dimensions is false, so conv_out_channels is num_output_
-  //The actual num_output_ would have 2 more channels (cos, sin of orientation)
   if (reverse_dimensions()) {
     conv_out_channels_ = channels_;
     conv_in_channels_ = num_output_;
@@ -223,7 +222,7 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
   //Stuff handled here:
   //- Check if bottom spatial sizes and num images are the same
   //- Check if bottom[1] has 2 channels
-  //- Initialize top[0] and top[1]
+  //- Initialize top[0], top[1] and top[2]
   //- Initialize intermediate kernels
   //- Initialize orientation map
   //- Initialize intermediate_kernel_alphas from the orientation map
@@ -247,13 +246,14 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
   compute_output_shape();
   vector<int> top_shape(bottom[0]->shape().begin(),
       bottom[0]->shape().begin() + channel_axis_);
-  top_shape.push_back(num_output_+2);
+  top_shape.push_back(num_output_);
   for (int i = 0; i < num_spatial_axes_; ++i) {
     top_shape.push_back(output_shape_[i]);
   }
   top[0]->Reshape(top_shape);
   top_shape[1] = 2;
   top[1]->Reshape(top_shape);
+  top[2]->Reshape(top_shape);
   if (reverse_dimensions()) {
     conv_out_spatial_dim_ = bottom[0]->count(first_spatial_axis);
   } else {
@@ -297,13 +297,16 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
     caffe_set(bias_multiplier_.count(), Dtype(1),
         bias_multiplier_.mutable_cpu_data());
   }
-
+  //orientation map would be top sized in n, h and w
+  top_shape[1] = 1;
+  orientation_map_.resize(top_shape);
+  intermediate_kernel_alphas_.resize(alpha_shape);
   vector<int> alpha_shape(4);
-  //Alpha maps would be top sized
-  alpha_shape[0] = bottom[0]->shape(0);
+  //Alpha maps would be top sized in n, h and w
+  alpha_shape[0] = top_shape[0];
   alpha_shape[1] = 4;
-  alpha_shape[2] = bottom[0]->shape(2);
-  alpha_shape[3] = bottom[0]->shape(3);
+  alpha_shape[2] = top_shape[2];
+  alpha_shape[3] = top_shape[3];
   intermediate_kernel_alphas_.resize(alpha_shape);
   //Create num_rotations_ copies of the weight kernel in intermediate_kernels_
   //In the future this would be done through a function call that takes
@@ -341,75 +344,45 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
 	}//c
   }//n
 
-  //Fill up intermediate_kernel_alphas_ based on input in bottom[1]
-  Dtype* orient = bottom[1]->cpu_data();
-  Dtype* alphas = intermediate_kernel_alphas_.mutable_cpu_data();
-
-  for(int n = 0; n < bottom[1]->shape(0); ++n){
-	//for(int c = 0; c < bottom[1]->shape(1); ++c){ //1 channel in orientation
-	 for(int h = 0; h < bottom[1]->shape(2); ++h){
-	  for(int w = 0; w < bottom[1]->shape(3); ++w){
-		  //Spatial Location in bottom[0]
-		 int q = h* bottom[0]->shape(3) + w; 
-		 Dtype angle = orient[q]; 
-		 //TODO: put a check on angle to ensure it is from -180 to 180 
-		 //The result comes from MATLAB's imgradient function
-		 //Spatial Location in intermediate_kernel_alphas_
-		 int r0 = ((0*bottom[0]->shape(2))+h)*bottom[0]->shape(3) + w;
-		 int r1 = ((1*bottom[0]->shape(2))+h)*bottom[0]->shape(3) + w;
-		 int r2 = ((2*bottom[0]->shape(2))+h)*bottom[0]->shape(3) + w;
-		 int r3 = ((3*bottom[0]->shape(2))+h)*bottom[0]->shape(3) + w;
-		 if((angle>=-180) && (angle<-90)){
-			 // between 2 and 3
-			 Dtype wght = (angle+180)/90; //0 to 1
-			 alphas[r2] =  1-wght;
-			 alphas[r3] =  wght;
-		 }
-		 else if((angle>=-90) && (angle<0)){
-			 // between 3 and 0
-			 Dtype wght = (angle+90)/90; //0 to 1
-			 alphas[r3] =  1-wght;
-			 alphas[r0] =  wght;
-		 }
-		 else if((angle>=0) && (angle<90)){
-			 // between 0 and 1
-			 Dtype wght = (angle)/90; //0 to 1
-			 alphas[r0] =  1-wght;
-			 alphas[r1] =  wght;
-		 }
-		 else if((angle>=90) && (angle<=180)){
-			 // between 1 and 2
-			 Dtype wght = (angle-90)/90; //0 to 1
-			 alphas[r1] =  1-wght;
-			 alphas[r2] =  wght;
-		 }
-	  }
-	 }
-	 orient+=bottom[1]->offset(1);
-	 alphas+=intermediate_kernel_alphas_.offset(1);
-	//}//c
-  }//n
 
 }
 template <typename Dtype>
 void GradOrientConvolutionLayer<Dtype>::GaussConvolveHelper(const Blob<Dtype>& in, Blob<Dtype>& out){
-    int N = in.num();
-    const Dtype* in_data = in.cpu_data();
+    int N = in.shape(0);
+	//int C = in.shape(1);
+	int H = in.shape(2);
+	int W = in.shape(3);
+	int PH = out.shape(2);
+	int PW = out.shape(3);
+
+	int stride_h =stride_data[0]; 
+	int stride_w =stride_data[1]; 
+
+	int pad_h =pad_data[0]; 
+	int pad_w =pad_data[1]; 
+	
+	int kernel_h = kernel_shape_data[0]; 
+	int kernel_w = kernel_shape_data[1]; 
+
+    const Dtype* in_data = in.cpu_data();    
     Dtype* out_data = out.mutable_cpu_data();
     caffe_set(out.count(), Dtype(0), out_data);
     const double* gaussian = gauss_kernel_.cpu_data();
+
     for (int n = 0; n < N; ++n) {
       for (int c = 0; c < channels_; ++c) {
-        for (int ph = 0; ph < pooled_height_; ++ph) {
-          for (int pw = 0; pw < pooled_width_; ++pw) {
-            int hstart = ph * stride_h_ ;
-            int wstart = pw * stride_w_ ;
-            int hend = min(hstart + kernel_h_, height_ );
-            int wend = min(wstart + kernel_w_, width_ );
+        for (int ph = 0; ph < PH; ++ph) {
+          for (int pw = 0; pw < PW; ++pw) {
+            int hstart = ph * stride_h  - pad_h;
+            int wstart = pw * stride_w  - pad_w;
+            int hend = min(hstart + kernel_h, H );
+            int wend = min(wstart + kernel_w, W );
+			hstart = max(hstart, 0);
+			wstart = max(wstart, 0);
             for (int h = hstart; h < hend; ++h) {
               for (int w = wstart; w < wend; ++w) {
-                out_data[ph * pooled_width_ + pw] +=
-                    gaussian[(h-hstart)*kernel_w_+(w-wstart)]*in_data[h * width_ + w];
+                out_data[ph * PW + pw] +=
+                    gaussian[(h-hstart)*kernel_w+(w-wstart)]*in_data[h * W + w];
               }
             }
 	  }
@@ -440,7 +413,83 @@ void GradOrientConvolutionLayer<Dtype>::compute_output_shape() {
 template <typename Dtype>
 void GradOrientConvolutionLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) {
+	
+  //Gauss convolve bottom[1] and create top[2]
+  GaussConvolveHelper(*bottom[1], *top[2]);
 
+  //Use top[2] to create the orientation map
+  const Dtype* top2_x = top[2]->cpu_data();
+  const Dtype* top2_y = top[2]->cpu_data() + top[2]->offset(0,1);
+  Dtype* orientation = orientation_map_.mutable_cpu_data();
+  int top_spatial_size = top[2]->count(2);
+  for(int n = 0; n < top[2]->shape(0); ++n){
+    caffe_atan2(top_spatial_size,top2_y, top2_x, orientation);  
+	orientation += orientation_map_.offset(1);
+	top2_x += top[2]->offset(1);
+	top2_y += top[2]->offset(1);
+  }
+
+  //Use the orientation map to create top[1]. 
+  Dtype* top1_0 = top[1]->mutable_cpu_data();
+  Dtype* top1_1 = top[1]->mutable_cpu_data() + top[1]->offset(0,1);
+  const Dtype* orientation = orientation_map_.cpu_data();
+  int top_spatial_size = top[1]->count(2);
+  for(int n = 0; n < top[2]->shape(0); ++n){
+    caffe_sin(top_spatial_size, orientation, top1_0);  
+    caffe_cos(top_spatial_size, orientation, top1_1);  
+	orientation += orientation_map_.offset(1);
+	top1_0 += top[1]->offset(1);
+	top1_1 += top[1]->offset(1);
+  }
+
+  //Fill up intermediate_kernel_alphas_ based on orientation map
+  const Dtype* orient = orientation_map_->cpu_data();
+  Dtype* alphas = intermediate_kernel_alphas_.mutable_cpu_data();
+
+  for(int n = 0; n < orientation_map_.shape(0); ++n){
+	//for(int c = 0; c < bottom[1]->shape(1); ++c){ //1 channel in orientation
+	 for(int h = 0; h <orientation_map_.shape(2); ++h){
+	  for(int w = 0; w < orientation_map_.shape(3); ++w){
+		  //Spatial Location in orientation map 
+		 int q = h* orientation_map_.shape(3) + w; 
+		 Dtype angle = 180. * orient[q] / M_PI; 
+		 //Spatial Location in intermediate_kernel_alphas_
+		 int r0 = ((0*orientation_map_.shape(2))+h)*orientation_map_.shape(3) + w;
+		 int r1 = ((1*orientation_map_.shape(2))+h)*orientation_map_.shape(3) + w;
+		 int r2 = ((2*orientation_map_.shape(2))+h)*orientation_map_.shape(3) + w;
+		 int r3 = ((3*orientation_map_.shape(2))+h)*orientation_map_.shape(3) + w;
+		 if((angle>=-180) && (angle<-90)){
+			 // between 2 and 3
+			 Dtype wght = (angle+180)/90; //0 to 1
+			 alphas[r2] =  1-wght;
+			 alphas[r3] =  wght;
+		 }
+		 else if((angle>=-90) && (angle<0)){
+			 // between 3 and 0
+			 Dtype wght = (angle+90)/90; //0 to 1
+			 alphas[r3] =  1-wght;
+			 alphas[r0] =  wght;
+		 }
+		 else if((angle>=0) && (angle<90)){
+			 // between 0 and 1
+			 Dtype wght = (angle)/90; //0 to 1
+			 alphas[r0] =  1-wght;
+			 alphas[r1] =  wght;
+		 }
+		 else if((angle>=90) && (angle<=180)){
+			 // between 1 and 2
+			 Dtype wght = (angle-90)/90; //0 to 1
+			 alphas[r1] =  1-wght;
+			 alphas[r2] =  wght;
+		 }
+	  }
+	 }
+	 orient+=orientation_map_->offset(1);
+	 alphas+=intermediate_kernel_alphas_.offset(1);
+	//}//c
+  }//n
+
+  //Do the convolutions and construct top[0]
   const Dtype* weight = this->blobs_[0]->cpu_data();
   const Dtype* bottom_data = bottom[0]->cpu_data();
 

@@ -14,8 +14,8 @@ namespace caffe {
 /**
  * @brief Convolves the input image with a bank of learned filters, 
  *		  oriented along the dominant gradient at that location,
- *        and (optionally) adds biases. The output also gets cos and
- *		  sin of the gradient orientations appended to it.
+ *        and (optionally) adds biases. cos and sin maps of the orientation
+ *		  in addition to gaussian convolved gradient maps are output too.
  *
  *   Caffe convolves by reduction to matrix multiplication. This achieves
  *   high-throughput and generality of input and filter dimensions but comes at
@@ -77,7 +77,7 @@ class GradOrientConvolutionLayer : public BaseConvolutionLayer<Dtype> {
   virtual inline int MinBottomBlobs() const {return 2;}
   //There are two outputs, one being the convolution result and the other
   //being the gradient map of the same spatial dimensions as the input
-  virtual inline int MinTopBlobs() const {return 1;}
+  virtual inline int MinTopBlobs() const {return 2;}
   virtual inline bool EqualNumBottomTopBlobs() const { return false; }
 
 
