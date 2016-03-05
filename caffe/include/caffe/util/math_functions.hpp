@@ -67,6 +67,15 @@ void caffe_div(const int N, const Dtype* a, const Dtype* b, Dtype* y);
 template <typename Dtype>
 void caffe_powx(const int n, const Dtype* a, const Dtype b, Dtype* y);
 
+template <typename Dtype>
+void caffe_sin(const int N, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_cos(const int N, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_atan2(const int n, const Dtype* a, const Dtype* b, Dtype* y);
+
 unsigned int caffe_rng_rand();
 
 template <typename Dtype>
@@ -208,6 +217,15 @@ void caffe_gpu_log(const int n, const Dtype* a, Dtype* y);
 
 template <typename Dtype>
 void caffe_gpu_powx(const int n, const Dtype* a, const Dtype b, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_sin(const int n, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_cos(const int n, const Dtype* a, Dtype* y);
+
+template <typename Dtype>
+void caffe_gpu_atan2(const int n, const Dtype* a, const Dtype* b, Dtype* y);
 
 // caffe_gpu_rng_uniform with two arguments generates integers in the range
 // [0, UINT_MAX].
