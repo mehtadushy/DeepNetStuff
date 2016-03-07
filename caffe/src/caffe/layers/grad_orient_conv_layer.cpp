@@ -1,6 +1,15 @@
+#include <algorithm>
+#include <cfloat>
 #include <vector>
 
+#include "caffe/filler.hpp"
+#include "caffe/layers/base_conv_layer.hpp"
+#include "caffe/util/im2col.hpp"
+#include "caffe/util/math_functions.hpp"
 #include "caffe/layers/grad_orient_conv_layer.hpp"
+
+using std::min;
+using std::max;
 
 namespace caffe {
 
@@ -123,6 +132,8 @@ void GradOrientConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& b
   num_output_ = this->layer_param_.convolution_param().num_output();
   CHECK_GT(num_output_, 0);
   group_ = this->layer_param_.convolution_param().group();
+  CHECK_EQ(group_, 1)
+      << "Just 1 group is supported. You'll have to dive into the code to make it work for more than 1 group, but that should be easy.";
   CHECK_EQ(channels_ % group_, 0);
   CHECK_EQ(num_output_ % group_, 0)
       << "Number of output should be multiples of group.";
@@ -184,12 +195,17 @@ void GradOrientConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& b
       bias_filler->Fill(this->blobs_[1].get());
     }
 	//Setting up intermediate kernels
-	for (int i = 0; i < num_rotations_; ++i) {
-		//Acceptable here because the spatial span along x and y is the same.
-		//If changing the kernels to rectangular kernels, resize these
-		//accordingly
-		intermediate_kernels_.pushback(*blob_[0]);
-	}
+	//Acceptable here because the spatial span along x and y is the same.
+	//If changing the kernels to rectangular kernels, resize these
+	//accordingly
+	weights_orient0_.Reshape(weight_shape);
+	intermediate_kernels_.push_back(&weights_orient0_);
+	weights_orient1_.Reshape(weight_shape);
+	intermediate_kernels_.push_back(&weights_orient1_);
+	weights_orient2_.Reshape(weight_shape);
+	intermediate_kernels_.push_back(&weights_orient2_);
+	weights_orient3_.Reshape(weight_shape);
+	intermediate_kernels_.push_back(&weights_orient3_);
   }
 
   kernel_dim_ = this->blobs_[0]->count(1);
@@ -207,10 +223,10 @@ void GradOrientConvolutionLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& b
   double gauss_sum = 0;
   for (int h = 0; h < kernel_h; ++h) {
       for (int w = 0; w < kernel_w; ++w) {
-	  gaussian[h * kernel_w_ + w] = 
+	  gaussian[h * kernel_w + w] = 
 		  exp(-(pow((h - kernel_h/2.0),2) + pow((w - kernel_w/2.0),2)) / (2.0* sigma * sigma))
 		      / (2 * 3.14159 * sigma * sigma);
-	   gauss_sum += gaussian[h* kernel_w_ + w];
+	   gauss_sum += gaussian[h* kernel_w + w];
       }
   }
   caffe_scal(gauss_kernel_.count(), 1.0/gauss_sum, gaussian);
@@ -299,47 +315,47 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
   }
   //orientation map would be top sized in n, h and w
   top_shape[1] = 1;
-  orientation_map_.resize(top_shape);
-  intermediate_kernel_alphas_.resize(alpha_shape);
+  orientation_map_.Reshape(top_shape);
+  //intermediate_kernel_alphas_.resize(alpha_shape);
   vector<int> alpha_shape(4);
   //Alpha maps would be top sized in n, h and w
   alpha_shape[0] = top_shape[0];
   alpha_shape[1] = 4;
   alpha_shape[2] = top_shape[2];
   alpha_shape[3] = top_shape[3];
-  intermediate_kernel_alphas_.resize(alpha_shape);
+  intermediate_kernel_alphas_.Reshape(alpha_shape);
   //Create num_rotations_ copies of the weight kernel in intermediate_kernels_
   //In the future this would be done through a function call that takes
   //num_rotations as input and create as many interpolated/rotated copies of the 
   //kernels.
-  Dtype* kernels = blobs_[0].cpu_data();
+  const Dtype* kernels = this->blobs_[0]->cpu_data();
   vector<Dtype*> rot_kernel;
   for(int i = 0; i < num_rotations_; ++i){
-     rot_kernel.pushback(intermediate_kernels_[i].mutable_cpu_data());
+     rot_kernel.push_back(intermediate_kernels_[i]->mutable_cpu_data());
   }
 	 
   //Rotating counter clockwise
-  for(int n = 0; n < blobs_[0]->shape(0); ++n){
-	for(int c = 0; c < blobs_[0]->shape(1); ++c){
-	 for(int h = 0; h < blobs_[0]->shape(2); ++h){
-	  for(int w = 0; w < blobs_[0]->shape(3); ++w){
-		 int q = h* blobs_[0]->shape(3) + w; 
-		 int r = h* blobs_[0]->shape(3) + w; 
+  for(int n = 0; n < this->blobs_[0]->shape(0); ++n){
+	for(int c = 0; c < this->blobs_[0]->shape(1); ++c){
+	 for(int h = 0; h < this->blobs_[0]->shape(2); ++h){
+	  for(int w = 0; w < this->blobs_[0]->shape(3); ++w){
+		 int q = h* this->blobs_[0]->shape(3) + w; 
+		 int r = h* this->blobs_[0]->shape(3) + w; 
 	     rot_kernel[0][q] = kernels[r];
 
-		 r = w * blobs_[0]->shape(3) +blobs_[0]->shape(2)- h; 
+		 r = w * this->blobs_[0]->shape(3) +this->blobs_[0]->shape(3)- h; 
 	     rot_kernel[1][q] = kernels[r];
 
-		 r = (blobs_[0]->shape(2)- h) * blobs_[0]->shape(3) +blobs_[0]->shape(3)- w;
+		 r = (this->blobs_[0]->shape(2)- h) * this->blobs_[0]->shape(3) +this->blobs_[0]->shape(3)- w;
 	     rot_kernel[2][q] = kernels[r];
 
-		 r = (blobs_[0]->shape(3)-w) * blobs_[0]->shape(3) + h; 
+		 r = (this->blobs_[0]->shape(2)-w) * this->blobs_[0]->shape(3) + h; 
 	     rot_kernel[3][q] = kernels[r];
 	  }
 	 }
 
 	  for(int i = 0; i < num_rotations_; ++i){
-		 rot_kernel[i] += blobs_[0]->offset(0,1);
+		 rot_kernel[i] += this->blobs_[0]->offset(0,1);
 	  }
 	}//c
   }//n
@@ -348,6 +364,9 @@ void GradOrientConvolutionLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bott
 }
 template <typename Dtype>
 void GradOrientConvolutionLayer<Dtype>::GaussConvolveHelper(const Blob<Dtype>& in, Blob<Dtype>& out){
+  const int* kernel_shape_data = this->kernel_shape_.cpu_data();
+  const int* stride_data = this->stride_.cpu_data();
+  const int* pad_data = this->pad_.cpu_data();
     int N = in.shape(0);
 	//int C = in.shape(1);
 	int H = in.shape(2);
@@ -394,6 +413,176 @@ void GradOrientConvolutionLayer<Dtype>::GaussConvolveHelper(const Blob<Dtype>& i
 }
 
 template <typename Dtype>
+void GradOrientConvolutionLayer<Dtype>::WeightGradientHelperCPU(const vector<Blob<Dtype>*>& top,
+       const vector<Blob<Dtype>*>& bottom){
+  const int* kernel_shape_data = this->kernel_shape_.cpu_data();
+  const int* stride_data = this->stride_.cpu_data();
+  const int* pad_data = this->pad_.cpu_data();
+	const Dtype* top_diff = top[0]->cpu_diff();
+	const Dtype* bottom_data = bottom[0]->cpu_data();
+	Dtype* weight_diff = this->blobs_[0]->mutable_cpu_diff();
+	const Dtype* alphas = intermediate_kernel_alphas_.cpu_diff();
+	//Clear weight diff because we'll accumulate gradients
+    caffe_set(this->blobs_[0]->count(), Dtype(0), weight_diff);
+	
+    int N = top[0]->shape(0);
+	int C = channels_;
+	int H = bottom[0]->shape(2);
+	int W = bottom[0]->shape(3);
+	int PH = pooled_height_;
+	int PW = pooled_width_;
+	int stride_h =stride_data[0]; 
+	int stride_w =stride_data[1]; 
+	int pad_h =pad_data[0]; 
+	int pad_w =pad_data[1]; 
+	int kernel_h = kernel_shape_data[0]; 
+	int kernel_w = kernel_shape_data[1]; 
+
+	 // For each kernel's corresponding channel slice
+	 // for all spatial orientations, compute weight diff with
+	 // the respective alphas
+	
+	 // vector<const Dtype*> rot_kernel;
+	 // for(int i = 0; i < num_rotations_; ++i){
+	 //    rot_kernel.push_back(intermediate_kernels_[i].cpu_data());
+	 // }
+
+	  //Horrible memory accesses here! 
+    for (int n = 0; n < N; ++n) {
+      for (int c = 0; c < C; ++c) {
+        for (int ph = 0; ph < PH; ++ph) {
+          for (int pw = 0; pw < PW; ++pw) {
+
+            int hstart = ph * stride_h  - pad_h;
+            int wstart = pw * stride_w  - pad_w;
+            int hend = min(hstart + kernel_h, H );
+            int wend = min(wstart + kernel_w, W );
+			hstart = max(hstart, 0);
+			wstart = max(wstart, 0);
+		    const Dtype* bottom_data_slice = bottom_data + n * bottom_dim_ + 
+										 c * (H*W);
+
+            for (int co = 0; co < num_output_; ++co) {
+				//Get the correct kernel slice
+				 // vector<const Dtype*> rot_kernel;
+				 // for(int i = 0; i < num_rotations_; ++i){
+				 //    rot_kernel.push_back(intermediate_kernels_[i].cpu_data() 
+				 //   		         + no * kernel_dim_ + c * (kernel_h*kernel_w));
+				 // }
+
+				 Dtype* weight_diff_slice = weight_diff + 
+						 co* kernel_dim_ + c * (kernel_h * kernel_w);
+
+				 Dtype top_diff_val = top_diff[n * top_dim_ + 
+									 co * (PH*PW) + ph * PW + pw];
+				 vector<Dtype> alpha_value;
+				 for(int i = 0; i < num_rotations_; ++i){
+ 				   alpha_value.push_back(alphas[ i * (PW*PH) + ph * PW + pw]);
+				 }
+
+				for (int h = hstart; h < hend; ++h) {
+				  for (int w = wstart; w < wend; ++w) {
+					 int r = (h-hstart)* kernel_w + (w-wstart); 
+					 weight_diff_slice[r] += top_diff_val * alpha_value[0] * 
+						                       bottom_data_slice[h*W+w];
+					 
+				     r = w * this->blobs_[0]->shape(3) +this->blobs_[0]->shape(2)- h; 
+					 weight_diff_slice[r] += top_diff_val * alpha_value[1] * 
+						                       bottom_data_slice[h*W+w];
+
+				     r = (this->blobs_[0]->shape(2)- h) * this->blobs_[0]->shape(3) +this->blobs_[0]->shape(3)- w;
+					 weight_diff_slice[r] += top_diff_val * alpha_value[2] * 
+						                       bottom_data_slice[h*W+w];
+				     
+					 r = (this->blobs_[0]->shape(3)-w) * this->blobs_[0]->shape(3) + h; 
+					 weight_diff_slice[r] += top_diff_val * alpha_value[3] * 
+						                       bottom_data_slice[h*W+w];
+				  }
+				}
+			  }//no
+		  }
+		}
+	  }
+	  alphas += intermediate_kernel_alphas_.offset(1);
+    }
+}
+template <typename Dtype>
+void GradOrientConvolutionLayer<Dtype>::BackpropagateHelperCPU(const vector<Blob<Dtype>*>& top,
+       const vector<Blob<Dtype>*>& bottom){
+  const int* kernel_shape_data = this->kernel_shape_.cpu_data();
+  const int* stride_data = this->stride_.cpu_data();
+  const int* pad_data = this->pad_.cpu_data();
+	const Dtype* top_diff = top[0]->cpu_diff();
+	Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
+	const Dtype* alphas = intermediate_kernel_alphas_.cpu_diff();
+	//Clear bottom diff because we'll accumulate gradients
+    caffe_set(bottom[0]->count(), Dtype(0), bottom_diff);
+	
+    int N = top[0]->shape(0);
+	int C = channels_;
+	int H = bottom[0]->shape(2);
+	int W = bottom[0]->shape(3);
+	int PH = pooled_height_;
+	int PW = pooled_width_;
+	int stride_h =stride_data[0]; 
+	int stride_w =stride_data[1]; 
+	int pad_h =pad_data[0]; 
+	int pad_w =pad_data[1]; 
+	int kernel_h = kernel_shape_data[0]; 
+	int kernel_w = kernel_shape_data[1]; 
+
+	
+	  //Horrible memory accesses here! 
+    for (int n = 0; n < N; ++n) {
+      for (int c = 0; c < C; ++c) {
+        for (int ph = 0; ph < PH; ++ph) {
+          for (int pw = 0; pw < PW; ++pw) {
+
+            int hstart = ph * stride_h  - pad_h;
+            int wstart = pw * stride_w  - pad_w;
+            int hend = min(hstart + kernel_h, H );
+            int wend = min(wstart + kernel_w, W );
+			hstart = max(hstart, 0);
+			wstart = max(wstart, 0);
+		    Dtype* bottom_diff_slice = bottom_diff + n * bottom_dim_ + 
+										 c * (H*W);
+
+            for (int co = 0; co < num_output_; ++co) {
+				//Get the correct kernel slice
+				  vector<const Dtype*> rot_kernel;
+				  for(int i = 0; i < num_rotations_; ++i){
+				     rot_kernel.push_back(intermediate_kernels_[i]->cpu_data() 
+				    		         + co * kernel_dim_ + c * (kernel_h*kernel_w));
+				  }
+
+				 //Dtype* weight_diff_slice = weight_diff + 
+				//		 co* kernel_dim_ + c * (kernel_h * kernel_w);
+
+				 Dtype top_diff_val = top_diff[n * top_dim_ + 
+									 co * (PH*PW) + ph * PW + pw];
+				 vector<Dtype> alpha_value;
+				 for(int i = 0; i < num_rotations_; ++i){
+ 				   alpha_value.push_back(alphas[ i * (PW*PH) + ph * PW + pw]);
+				 }
+
+				for (int h = hstart; h < hend; ++h) {
+				  for (int w = wstart; w < wend; ++w) {
+					 int r = (h-hstart)* kernel_w + (w-wstart); 
+				     for(int i = 0; i < num_rotations_; ++i){
+					   bottom_diff_slice[h*W+w] += top_diff_val * alpha_value[i] * 
+						                       rot_kernel[i][r];
+					 }
+				  }
+				}
+			  }//co
+		  }//pw
+		}//ph
+	  }//c
+	  alphas += intermediate_kernel_alphas_.offset(1);
+    }//n
+}
+
+template <typename Dtype>
 void GradOrientConvolutionLayer<Dtype>::compute_output_shape() {
   const int* kernel_shape_data = this->kernel_shape_.cpu_data();
   const int* stride_data = this->stride_.cpu_data();
@@ -432,18 +621,18 @@ void GradOrientConvolutionLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& 
   //Use the orientation map to create top[1]. 
   Dtype* top1_0 = top[1]->mutable_cpu_data();
   Dtype* top1_1 = top[1]->mutable_cpu_data() + top[1]->offset(0,1);
-  const Dtype* orientation = orientation_map_.cpu_data();
-  int top_spatial_size = top[1]->count(2);
+  const Dtype* orient = orientation_map_.cpu_data();
+  top_spatial_size = top[1]->count(2);
   for(int n = 0; n < top[2]->shape(0); ++n){
-    caffe_sin(top_spatial_size, orientation, top1_0);  
-    caffe_cos(top_spatial_size, orientation, top1_1);  
-	orientation += orientation_map_.offset(1);
+    caffe_sin(top_spatial_size, orient, top1_0);  
+    caffe_cos(top_spatial_size, orient, top1_1);  
+	orient += orientation_map_.offset(1);
 	top1_0 += top[1]->offset(1);
 	top1_1 += top[1]->offset(1);
   }
 
   //Fill up intermediate_kernel_alphas_ based on orientation map
-  const Dtype* orient = orientation_map_->cpu_data();
+  orient = orientation_map_.cpu_data();
   Dtype* alphas = intermediate_kernel_alphas_.mutable_cpu_data();
 
   for(int n = 0; n < orientation_map_.shape(0); ++n){
@@ -484,91 +673,116 @@ void GradOrientConvolutionLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& 
 		 }
 	  }
 	 }
-	 orient+=orientation_map_->offset(1);
+	 orient+=orientation_map_.offset(1);
 	 alphas+=intermediate_kernel_alphas_.offset(1);
 	//}//c
   }//n
 
-  //Do the convolutions and construct top[0]
-  const Dtype* weight = this->blobs_[0]->cpu_data();
-  const Dtype* bottom_data = bottom[0]->cpu_data();
 
+  //Do the convolutions and construct top[0]
+  //const Dtype* weight = this->blobs_[0]->cpu_data();
   //Make a temp blob to cache the resulting convolutions of the kernels
+  //per image
   vector<int> out_shape;
   out_shape.push_back(1);
   out_shape.push_back(num_output_);
   for (int i = 0; i < num_spatial_axes_; ++i) {
     out_shape.push_back(output_shape_[i]);
   }
+  int spatial_size = top[0]->count(2);
   Blob<Dtype> output_shaped_blob;
-  output_shaped_blob.resize(out_shape);
+  output_shaped_blob.Reshape(out_shape);
   Dtype* temp_output = output_shaped_blob.mutable_cpu_data();
-
-    Dtype* top_data = top[i]->mutable_cpu_data();
+  Dtype* top_data = top[0]->mutable_cpu_data();
+  const Dtype* bottom_data = bottom[0]->cpu_data();
+  const Dtype* kernel_alphas = intermediate_kernel_alphas_.cpu_data();
+  //Clear top data
+  caffe_set(top[0]->count(), Dtype(0), top_data);
 	
   for (int n = 0; n < this->num_; ++n) {
-	vector<Blob<Dtype>> intermediate_results;
-	for(int i = 0; i < num_rotation_; ++i){
-		const Dtype* weight = intermediate_kernels_[i].cpu_data();
+	//vector<Blob<Dtype>> intermediate_results;
+	for(int i = 0; i < num_rotations_; ++i){
+		const Dtype* weight = intermediate_kernels_[i]->cpu_data();
 		this->forward_cpu_gemm(bottom_data + n * this->bottom_dim_, weight,
          temp_output);
-		//Multiply with the correct spatial weight before storing
-		//it in intermediate_results so that later they can be put
-		//into top more easily.
+		//Multiply with the correct spatial weight and add to top
 		const Dtype* temp = output_shaped_blob.cpu_data();
-		const Dtype* alphas = intermediate_kernel_alphas_.cpu_data();
-
-		  for(int c = 0; c < num_output_ ; ++c){
-		      alphas = alphas +  
-				  temp indexed by channel
-			  caffe_mul( spatial ,temp,alphas, temp_output)  
-		  }
-		  intermediate_results.pushback(output_shaped_blob);
+		for(int c = 0; c < num_output_ ; ++c){
+			  caffe_mul( spatial_size, temp+c*spatial_size, kernel_alphas + i * spatial_size, temp_output + c*spatial_size) ;
 		}
-		//Sum up all four and put in top
-      this->forward_cpu_gemm(bottom_data + n * this->bottom_dim_, weight,
-          top_data + n * this->top_dim_);
+		const Dtype* top_nonmutable = top[0]->cpu_data();
+		caffe_add(this->top_dim_, temp, top_nonmutable + n * this->top_dim_, top_data + n * this->top_dim_);
+		}
+	  kernel_alphas += intermediate_kernel_alphas_.offset(1);
+
       if (this->bias_term_) {
         const Dtype* bias = this->blobs_[1]->cpu_data();
         this->forward_cpu_bias(top_data + n * this->top_dim_, bias);
       }
-    }
-  }
+    } //n
 }
 
 template <typename Dtype>
 void GradOrientConvolutionLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
       const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
-  const Dtype* weight = this->blobs_[0]->cpu_data();
-  Dtype* weight_diff = this->blobs_[0]->mutable_cpu_diff();
-  for (int i = 0; i < top.size(); ++i) {
-    const Dtype* top_diff = top[i]->cpu_diff();
-    const Dtype* bottom_data = bottom[i]->cpu_data();
-    Dtype* bottom_diff = bottom[i]->mutable_cpu_diff();
-    // Bias gradient, if necessary.
-    if (this->bias_term_ && this->param_propagate_down_[1]) {
-      Dtype* bias_diff = this->blobs_[1]->mutable_cpu_diff();
-      for (int n = 0; n < this->num_; ++n) {
-        this->backward_cpu_bias(bias_diff, top_diff + n * this->t op_dim_);
-      }
+	//const Dtype* weight = this->blobs_[0]->cpu_data();
+	//Dtype* weight_diff = this->blobs_[0]->mutable_cpu_diff();
+
+	//Only top[0] is propagated down
+	const Dtype* top_diff = top[0]->cpu_diff();
+	//const Dtype* bottom_data = bottom[0]->cpu_data();
+	//Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
+	// Bias gradient, if necessary. I hope this doesn't need to
+	// be changed
+	if (this->bias_term_ && this->param_propagate_down_[1]) {
+	  Dtype* bias_diff = this->blobs_[1]->mutable_cpu_diff();
+	  for (int n = 0; n < this->num_; ++n) {
+		this->backward_cpu_bias(bias_diff, top_diff + n * this->top_dim_);
+	  }
+	} 
+
+	if (this->param_propagate_down_[0]) {
+	  WeightGradientHelperCPU(top, bottom);
+	}
+
+	// gradient w.r.t. bottom data, if necessary.
+	if (propagate_down[0]) {
+	  BackpropagateHelperCPU(top, bottom); 
+	}
+}
+
+template <typename Dtype>
+void GradOrientConvolutionLayer<Dtype>::forward_cpu_gemm(const Dtype* input,
+    const Dtype* weights, Dtype* output, bool skip_im2col) {
+  const Dtype* col_buff = input;
+  if (!is_1x1_) {
+    if (!skip_im2col) {
+      conv_im2col_cpu(input, col_buffer_.mutable_cpu_data());
     }
-    if (this->param_propagate_down_[0] || propagate_down[i]) {
-      for (int n = 0; n < this->num_; ++n) {
-        // gradient w.r.t. weight. Note that we will accumulate diffs.
-        if (this->param_propagate_down_[0]) {
-          this->weight_cpu_gemm(bottom_data + n * this->bottom_dim_,
-              top_diff + n * this->top_dim_, weight_diff);
-        }
-        // gradient w.r.t. bottom data, if necessary.
-        if (propagate_down[i]) {
-          this->backward_cpu_gemm(top_diff + n * this->top_dim_, weight,
-              bottom_diff + n * this->bottom_dim_);
-        }
-      }
-    }
+    col_buff = col_buffer_.cpu_data();
+  }
+  for (int g = 0; g < group_; ++g) {
+    caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, conv_out_channels_ /
+        group_, conv_out_spatial_dim_, kernel_dim_,
+        (Dtype)1., weights + weight_offset_ * g, col_buff + col_offset_ * g,
+        (Dtype)0., output + output_offset_ * g);
   }
 }
 
+template <typename Dtype>
+void GradOrientConvolutionLayer<Dtype>::forward_cpu_bias(Dtype* output,
+    const Dtype* bias) {
+  caffe_cpu_gemm<Dtype>(CblasNoTrans, CblasNoTrans, num_output_,
+      out_spatial_dim_, 1, (Dtype)1., bias, bias_multiplier_.cpu_data(),
+      (Dtype)1., output);
+}
+
+template <typename Dtype>
+void GradOrientConvolutionLayer<Dtype>::backward_cpu_bias(Dtype* bias,
+    const Dtype* input) {
+  caffe_cpu_gemv<Dtype>(CblasNoTrans, num_output_, out_spatial_dim_, 1.,
+      input, bias_multiplier_.cpu_data(), 1., bias);
+}
 #ifdef CPU_ONLY
 STUB_GPU(GradOrientConvolutionLayer);
 #endif
