@@ -1,0 +1,1 @@
+/scratch/common/pool0/dmetha/mnist/rot_train.hdf5

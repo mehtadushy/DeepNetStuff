@@ -63,9 +63,7 @@ class GradOrientConvolutionLayer : public Layer<Dtype> {
    */
   explicit GradOrientConvolutionLayer(const LayerParameter& param)
       : Layer<Dtype>(param) {}
-  //Dunno if this can be mucked about with
-  virtual inline const char* type() const { return "Funky"; }
-//  virtual inline const char* type() const { return "Gradient Oriented Convolution"; }
+  virtual inline const char* type() const { return "GradOrientConvolution"; }
 
   virtual void LayerSetUp(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top);
@@ -132,7 +130,7 @@ class GradOrientConvolutionLayer : public Layer<Dtype> {
     return (*bottom_shape_)[channel_axis_ + i];
   }
   // Compute height_out_ and width_out_ from other parameters.
-  virtual void compute_output_shape() = 0;
+  virtual void compute_output_shape();
   virtual inline bool reverse_dimensions() { return false; }
   /// @brief The spatial dimensions of a filter kernel.
   Blob<int> kernel_shape_;

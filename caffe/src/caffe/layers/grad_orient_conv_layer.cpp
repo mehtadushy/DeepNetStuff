@@ -3,7 +3,6 @@
 #include <vector>
 
 #include "caffe/filler.hpp"
-#include "caffe/layers/base_conv_layer.hpp"
 #include "caffe/util/im2col.hpp"
 #include "caffe/util/math_functions.hpp"
 #include "caffe/layers/grad_orient_conv_layer.hpp"
@@ -368,7 +367,7 @@ void GradOrientConvolutionLayer<Dtype>::GaussConvolveHelper(const Blob<Dtype>& i
   const int* stride_data = this->stride_.cpu_data();
   const int* pad_data = this->pad_.cpu_data();
     int N = in.shape(0);
-	//int C = in.shape(1);
+	int C = in.shape(1);
 	int H = in.shape(2);
 	int W = in.shape(3);
 	int PH = out.shape(2);
@@ -389,7 +388,7 @@ void GradOrientConvolutionLayer<Dtype>::GaussConvolveHelper(const Blob<Dtype>& i
     const double* gaussian = gauss_kernel_.cpu_data();
 
     for (int n = 0; n < N; ++n) {
-      for (int c = 0; c < channels_; ++c) {
+      for (int c = 0; c < C; ++c) {
         for (int ph = 0; ph < PH; ++ph) {
           for (int pw = 0; pw < PW; ++pw) {
             int hstart = ph * stride_h  - pad_h;
@@ -473,7 +472,7 @@ void GradOrientConvolutionLayer<Dtype>::WeightGradientHelperCPU(const vector<Blo
 				 Dtype* weight_diff_slice = weight_diff + 
 						 co* kernel_dim_ + c * (kernel_h * kernel_w);
 
-				 Dtype top_diff_val = top_diff[n * top_dim_ + 
+				 Dtype top_diff_val = -top_diff[n * top_dim_ + 
 									 co * (PH*PW) + ph * PW + pw];
 				 vector<Dtype> alpha_value;
 				 for(int i = 0; i < num_rotations_; ++i){
@@ -569,7 +568,7 @@ void GradOrientConvolutionLayer<Dtype>::BackpropagateHelperCPU(const vector<Blob
 				  for (int w = wstart; w < wend; ++w) {
 					 int r = (h-hstart)* kernel_w + (w-wstart); 
 				     for(int i = 0; i < num_rotations_; ++i){
-					   bottom_diff_slice[h*W+w] += top_diff_val * alpha_value[i] * 
+					   bottom_diff_slice[h*W+w] -= top_diff_val * alpha_value[i] * 
 						                       rot_kernel[i][r];
 					 }
 				  }
@@ -788,5 +787,6 @@ STUB_GPU(GradOrientConvolutionLayer);
 #endif
 
 INSTANTIATE_CLASS(GradOrientConvolutionLayer);
+REGISTER_LAYER_CLASS(GradOrientConvolution);
 
 }  // namespace caffe
